@@ -1,24 +1,21 @@
+const fs = require('fs');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 
 async function startSock() {
-    // Cargar las credenciales desde el directorio './auth_info'
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-
-    // Crear el socket
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true // Muestra el código QR en la terminal para autenticar
+        printQRInTerminal: true
     });
 
-    // Manejador de eventos de conexión
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexión cerrada, intentando reconectar:', shouldReconnect);
             if (shouldReconnect) {
-                startSock(); // Reintenta la conexión
+                startSock();
             } else {
                 console.log('El usuario se deslogueó, no se intentará reconectar.');
             }
@@ -27,7 +24,6 @@ async function startSock() {
         }
     });
 
-    // Manejador de eventos para nuevos mensajes
     sock.ev.on('messages.upsert', async (msg) => {
         const message = msg.messages[0];
         if (!message.key.fromMe && message.message) {
@@ -35,25 +31,47 @@ async function startSock() {
             const text = message.message.conversation || '';
             
             console.log(`Mensaje de ${from}:`, text);
+            const lowerText = text.toLowerCase();
 
-            // Sistema de comandos básico
-            if (text.toLowerCase() === 'Hola') {
-                await sock.sendMessage(from, { text: 'Selecciona una opción:\n1. Info 📄\n2. Chiste 🤣\n3. Estado 🏷️' });
-            } else if (text === '1') {
-                await sock.sendMessage(from, { text: '¡Soy un bot de WhatsApp listo para ayudarte! 🤖' });
-            } else if (text === '2') {
-                await sock.sendMessage(from, { text: '¿Por qué los programadores odian la naturaleza? Porque tiene demasiados bugs 🐛😆' });
-            } else if (text === '3') {
-                await sock.sendMessage(from, { text: 'Todo está funcionando perfectamente 🟢' });
-            } else {
-                await sock.sendMessage(from, { text: 'No entiendo ese comando. Escribe *menu* para ver las opciones.' });
-            }
+            fs.readFile('pyr.json', 'utf8', async (err, data) => {
+                if (err) {
+                    console.error('Error al leer el archivo de respuestas:', err);
+                    await sock.sendMessage(from, { text: 'Hubo un problema al procesar tu solicitud.' });
+                    return;
+                }
+
+                const respuestas = JSON.parse(data);
+
+                if (lowerText === 'documento') {
+                    // Respuesta específica para "documento"
+                    const rutaArchivo = './PEP ING-SISTEMAS.pdf';
+
+                    await sock.sendMessage(from, {
+                        document: fs.readFileSync(rutaArchivo), // Leer el archivo PDF
+                        mimetype: 'application/pdf',
+                        fileName: 'PEP-ING SISTEMAS.pdf' // Nombre con el que se enviará el archivo
+                    });
+                } else if (lowerText === 'menu') {
+                    // Construir y enviar el mensaje sobre el documento primero, seguido del menú
+                    const menu = respuestas.menu;
+                    let menuText = `${menu.title}\n\n${menu.documento}\n\n`; // Agregar mensaje del documento arriba
+                
+                    // Agregar las opciones del menú debajo
+                    for (const [key, option] of Object.entries(menu.options)) {
+                        menuText += `${key}. ${option}\n`;
+                    }
+                
+                    await sock.sendMessage(from, { text: menuText });
+                } else {
+                    // Responder con la opción correspondiente o mensaje por defecto
+                    const respuesta = respuestas[lowerText] || respuestas.hola; // Enviar el mensaje "hola" si no hay respuesta
+                    await sock.sendMessage(from, { text: respuesta });
+                }
+            });
         }
     });
 
-    // Guardar las credenciales cada vez que cambien
     sock.ev.on('creds.update', saveCreds);
 }
 
-// Llamar a la función startSock para iniciar el bot
 startSock().catch(err => console.error('Error al iniciar el bot:', err));
